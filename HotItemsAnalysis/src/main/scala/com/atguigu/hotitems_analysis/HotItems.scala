@@ -1,8 +1,10 @@
 package com.atguigu.hotitems_analysis
 
 import java.sql.Timestamp
+import java.util.Properties
 
 import org.apache.flink.api.common.functions.AggregateFunction
+import org.apache.flink.api.common.serialization.SimpleStringSchema
 import org.apache.flink.api.common.state.{ListState, ListStateDescriptor}
 import org.apache.flink.api.java.tuple.{Tuple, Tuple1}
 import org.apache.flink.configuration.Configuration
@@ -13,6 +15,7 @@ import org.apache.flink.streaming.api.scala._
 import org.apache.flink.streaming.api.scala.function.WindowFunction
 import org.apache.flink.streaming.api.windowing.time.Time
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow
+import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer
 import org.apache.flink.util.Collector
 
 import scala.collection.mutable.ListBuffer
@@ -30,8 +33,20 @@ object HotItems {
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
 
     // 从文件中读取，并转换成样例类，提取时间戳生成watermark
-    val inputPath = getClass.getResource("/UserBehavior.csv").getPath
-    val inputStream = env.readTextFile(inputPath)
+    //    val inputPath = getClass.getResource("/UserBehavior.csv").getPath
+    //    val inputStream = env.readTextFile(inputPath)
+
+    // 从Kafka读取数据
+    val properties = new Properties()
+    properties.setProperty("bootstrap.servers", "node01:9092")
+    properties.setProperty("group.id", "consumer-group")
+    properties.setProperty("key.deserializer",
+      "org.apache.kafka.common.serialization.StringDeserializer")
+    properties.setProperty("value.deserializer",
+      "org.apache.kafka.common.serialization.StringDeserializer")
+
+    val inputStream = env.addSource(new FlinkKafkaConsumer[String]("hotitems", new SimpleStringSchema(), properties))
+
     val dataStream = inputStream
       .map(data => {
         val arr = data.split(",")
