@@ -30,7 +30,8 @@ object HotPages {
 
     // 读取数据转换成样例并提取时间戳和watermark
     val inputPath = getClass.getResource("/apache.log").getPath
-    val inputStream = env.readTextFile(inputPath)
+    //    val inputStream = env.readTextFile(inputPath)
+    val inputStream = env.socketTextStream("node01", 7777)
     val dataStream = inputStream
       .map(data => {
         val arr = data.split(" ")
@@ -39,7 +40,7 @@ object HotPages {
         val ts = simpleDateFormat.parse(arr(3)).getTime
         ApacheLogEvent(arr(0), arr(1), ts, arr(5), arr(6))
       })
-      .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[ApacheLogEvent](Time.minutes(1)) {
+      .assignTimestampsAndWatermarks(new BoundedOutOfOrdernessTimestampExtractor[ApacheLogEvent](Time.seconds(1)) {
         override def extractTimestamp(t: ApacheLogEvent): Long = t.timestamp
       })
 
@@ -52,11 +53,20 @@ object HotPages {
       })
       .keyBy(_.url)
       .timeWindow(Time.minutes(10), Time.seconds(5))
+      // 允许延迟1min
+      .allowedLateness(Time.minutes(1))
+      .sideOutputLateData(new OutputTag[ApacheLogEvent]("late"))
       .aggregate(new PageCountAgg(), new PageViewCountWindowResult())
 
     val resultStream = aggStream
       .keyBy(_.windowEnd)
       .process(new TopNHotPages(3))
+
+
+    dataStream.print("data")
+    aggStream.print("agg")
+    // 读侧输出流
+    aggStream.getSideOutput(new OutputTag[ApacheLogEvent]("late")).print("late")
 
     resultStream.print()
 
@@ -121,3 +131,15 @@ class TopNHotPages(n: Int) extends KeyedProcessFunction[Long, PageViewCount, Str
     out.collect(result.toString())
   }
 }
+
+/**
+83.149.9.216 - - 17/05/2015:10:25:49 +0000 GET /presentations/
+83.149.9.216 - - 17/05/2015:10:25:50 +0000 GET /presentations/
+83.149.9.216 - - 17/05/2015:10:25:51 +0000 GET /presentations/
+83.149.9.216 - - 17/05/2015:10:25:52 +0000 GET /presentations/
+83.149.9.216 - - 17/05/2015:10:25:46 +0000 GET /presentations/
+83.149.9.216 - - 17/05/2015:10:25:31 +0000 GET /presentations/
+83.149.9.216 - - 17/05/2015:10:25:53 +0000 GET /presentations/
+83.149.9.216 - - 17/05/2015:10:25:23 +0000 GET /presentations/
+83.149.9.216 - - 17/05/2015:10:25:54 +0000 GET /presentations/
+ */
