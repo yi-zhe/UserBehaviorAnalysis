@@ -4,7 +4,7 @@ import java.sql.Timestamp
 import java.text.SimpleDateFormat
 
 import org.apache.flink.api.common.functions.AggregateFunction
-import org.apache.flink.api.common.state.{ListState, ListStateDescriptor}
+import org.apache.flink.api.common.state.{ListState, ListStateDescriptor, MapState, MapStateDescriptor}
 import org.apache.flink.streaming.api.TimeCharacteristic
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction
 import org.apache.flink.streaming.api.functions.timestamps.BoundedOutOfOrdernessTimestampExtractor
@@ -97,24 +97,43 @@ class PageViewCountWindowResult() extends WindowFunction[Long, PageViewCount, St
 
 class TopNHotPages(n: Int) extends KeyedProcessFunction[Long, PageViewCount, String] {
 
-  lazy val pageViewCountListState: ListState[PageViewCount] =
-    getRuntimeContext.getListState(new ListStateDescriptor[PageViewCount]("pageViewCount-list", classOf[PageViewCount]))
+  //  lazy val pageViewCountListState: ListState[PageViewCount] =
+  //    getRuntimeContext.getListState(new ListStateDescriptor[PageViewCount]("pageViewCount-list", classOf[PageViewCount]))
+
+  lazy val pageViewCountMapState: MapState[String, Long] =
+    getRuntimeContext.getMapState(new MapStateDescriptor[String, Long]("pageViewCount-map", classOf[String], classOf[Long]))
 
   override def processElement(i: PageViewCount, context: KeyedProcessFunction[Long, PageViewCount, String]#Context, collector: Collector[String]): Unit = {
-    pageViewCountListState.add(i)
+    //    pageViewCountListState.add(i)
+    pageViewCountMapState.put(i.url, i.count)
     context.timerService().registerEventTimeTimer(i.windowEnd + 1)
+    // 注册一个定时器 1分钟后触发 这时候窗口已经彻底关闭 可以清空状态
+    context.timerService().registerEventTimeTimer(i.windowEnd + 60 * 1000L)
   }
 
   override def onTimer(timestamp: Long, ctx: KeyedProcessFunction[Long, PageViewCount, String]#OnTimerContext, out: Collector[String]): Unit = {
-    val allPageViewCounts: ListBuffer[PageViewCount] = ListBuffer()
-    val iter = pageViewCountListState.get.iterator()
+    //    val allPageViewCounts: ListBuffer[PageViewCount] = ListBuffer()
+    /*val iter = pageViewCountListState.get.iterator()
     while (iter.hasNext) {
       allPageViewCounts += iter.next()
     }
-    pageViewCountListState.clear()
+    pageViewCountListState.clear()*/
+
+    // 判断定时器触发时间，如果已经是窗口结束时间1分钟后，那么直接清空状态
+    if (timestamp == ctx.getCurrentKey + 60 * 1000L) {
+      pageViewCountMapState.clear()
+      return
+    }
+
+    val allPageViewCounts: ListBuffer[(String, Long)] = ListBuffer()
+    val iter = pageViewCountMapState.entries().iterator()
+    while (iter.hasNext) {
+      val entry = iter.next()
+      allPageViewCounts += ((entry.getKey, entry.getValue))
+    }
 
     // 按照访问量排序
-    val sortedPageViewCounts = allPageViewCounts.sortWith(_.count > _.count).take(n)
+    val sortedPageViewCounts = allPageViewCounts.sortWith(_._2 > _._2).take(n)
 
     // 将排名信息格式化成String
     val result: StringBuilder = new StringBuilder()
@@ -123,8 +142,8 @@ class TopNHotPages(n: Int) extends KeyedProcessFunction[Long, PageViewCount, Str
     for (i <- sortedPageViewCounts.indices) {
       val currentItemViewCount = sortedPageViewCounts(i)
       result.append("NO").append(i + 1).append(": ")
-        .append(" 页面URL=").append(currentItemViewCount.url)
-        .append(" 热门度=").append(currentItemViewCount.count).append("\n")
+        .append(" 页面URL=").append(currentItemViewCount._1)
+        .append(" 热门度=").append(currentItemViewCount._2).append("\n")
     }
     result.append("==================================\n")
     Thread.sleep(200)
@@ -133,13 +152,13 @@ class TopNHotPages(n: Int) extends KeyedProcessFunction[Long, PageViewCount, Str
 }
 
 /**
-83.149.9.216 - - 17/05/2015:10:25:49 +0000 GET /presentations/
-83.149.9.216 - - 17/05/2015:10:25:50 +0000 GET /presentations/
-83.149.9.216 - - 17/05/2015:10:25:51 +0000 GET /presentations/
-83.149.9.216 - - 17/05/2015:10:25:52 +0000 GET /presentations/
-83.149.9.216 - - 17/05/2015:10:25:46 +0000 GET /presentations/
-83.149.9.216 - - 17/05/2015:10:25:31 +0000 GET /presentations/
-83.149.9.216 - - 17/05/2015:10:25:53 +0000 GET /presentations/
-83.149.9.216 - - 17/05/2015:10:25:23 +0000 GET /presentations/
-83.149.9.216 - - 17/05/2015:10:25:54 +0000 GET /presentations/
+ *83.149.9.216 - - 17/05/2015:10:25:49 +0000 GET /presentations/
+ *83.149.9.216 - - 17/05/2015:10:25:50 +0000 GET /presentations/
+ *83.149.9.216 - - 17/05/2015:10:25:51 +0000 GET /presentations/
+ *83.149.9.216 - - 17/05/2015:10:25:52 +0000 GET /presentations/
+ *83.149.9.216 - - 17/05/2015:10:25:46 +0000 GET /presentations/
+ *83.149.9.216 - - 17/05/2015:10:25:31 +0000 GET /presentations/
+ *83.149.9.216 - - 17/05/2015:10:25:53 +0000 GET /presentations/
+ *83.149.9.216 - - 17/05/2015:10:25:23 +0000 GET /presentations/
+ *83.149.9.216 - - 17/05/2015:10:25:54 +0000 GET /presentations/
  */
